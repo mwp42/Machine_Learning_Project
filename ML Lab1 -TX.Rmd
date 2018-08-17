@@ -1,0 +1,292 @@
+---
+title: "Machine Learning Lab - Team: Confidence Squared"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Part I: Preprocessing and EDA
+
+- The data comes from a global e-retailer company, including orders from 2012 to 2015. Import the **Orders** dataset and do some basic EDA. 
+- For problem 1 to 3, we mainly focus on data cleaning and data visualizations. You can use all the packages that you are familiar with to conduct some plots and also provide **brief interpretations** about your findings.
+
+### Problem 1: Dataset Import & Cleaning
+Check **"Profit"** and **"Sales"** in the dataset, convert these two columns to numeric type. 
+
+
+```{r question 1, echo=FALSE}
+library(ggplot2)
+library(data.table)
+library(dplyr)
+library(tidyr)
+
+Orders <- read.table("./Orders.csv",head = T, sep = ',')
+Returns <- read.table("./Returns.csv",head = T, sep=',')
+
+Orders$Profit<-gsub(",","",Orders$Profit, fixed = TRUE)
+Orders$Profit<-as.numeric(gsub("$","",Orders$Profit,fixed = TRUE))
+
+Orders$Sales<-gsub(",","",Orders$Sales, fixed = TRUE)
+Orders$Sales<-as.numeric(gsub("$","",Orders$Sales,fixed = TRUE))
+```
+### Problem 2: Inventory Management
+- Retailers that depend on seasonal shoppers have a particularly challenging job when it comes to inventory management. Your manager is making plans for next year's inventory.
+- He wants you to answer the following questions:
+    1. Is there any seasonal trend of inventory in the company?
+    2. Is the seasonal trend the same for different categories?
+
+- ***Hint:*** For each order, it has an attribute called `Quantity` that indicates the number of product in the order. If an order contains more than one product, there will be multiple observations of the same order.
+
+```{r question 2.1, echo=FALSE}
+Orders$Order.Date<-as.Date(Orders$Order.Date,"%m/%d/%y")
+Orders$Ship.Date<-as.Date(Orders$Ship.Date,"%m/%d/%y")
+
+Orders$Order.Year<-format(as.Date(Orders$Order.Date, format="%d/%m/%Y"),"%Y")
+Orders$Ship.Year<-format(as.Date(Orders$Order.Date, format="%d/%m/%Y"),"%Y")
+Orders$Order.Month<-format(as.Date(Orders$Order.Date, format="%d/%m/%Y"),"%m")
+Orders$Ship.Month<-format(as.Date(Orders$Order.Date, format="%d/%m/%Y"),"%m")
+
+#show Quantity variance through 1-12 month in different years for different categories
+Orders<-Orders[order(Orders$Order.Year,Orders$Order.Month),]
+Orders_q1 = Orders %>%
+    group_by(., Order.Year, Order.Month) %>%
+    summarise(., Quantity=sum(Quantity))
+
+ggplot(data=Orders_q1, aes(x=Order.Month, y=Quantity, group=Order.Year))+
+  geom_line(aes(color=Order.Year))+
+  geom_point(aes(color=Order.Year))+
+  xlab("Date")+
+  ylab("Quantity")
+
+```
+
+# Answer: 2.1 Yes. There is seasonality in the inventory quantities.
+# Answer: 2.2 Seasonal trend is different for different categories?
+# Office supplies has larger volatilities than Technology and Funiture
+
+```{r question 2.2, echo=FALSE}
+Orders_q2 = Orders %>%
+    group_by(., Category,Order.Year, Order.Month) %>%
+    summarise(., Quantity=sum(Quantity))
+
+ggplot(data=Orders_q2, aes(x=Order.Month, y=Quantity, group=Order.Year))+
+  geom_line(aes(color=Order.Year))+
+  geom_point(aes(color=Order.Year))+
+  xlab("Date")+
+  ylab("Quantity")+
+  facet_wrap(~Category)
+```
+
+```
+
+```
+### Problem 3: Why did customers make returns?
+- Your manager required you to give a brief report (**Plots + Interpretations**) on returned orders.
+
+	1. How much profit did we lose due to returns each year?
+
+```{r question 3.1, echo=FALSE}
+Orders.Returns<-merge(Orders,Returns,by="Order.ID")
+Loss.table = Orders.Returns[ Orders.Returns$Profit>0,]
+Loss.table %>%
+  group_by(.,Order.Year) %>%
+  summarise(Loss=sum(Profit))
+```
+# Answer 3.1: 
+#2012:23250.
+#2013:16983.
+#2014:24950.
+#2015:33021.
+
+---------------------------------
+#3.2. How many customer returned more than once? more than 5 times?
+#Orders.Returns.Unique = Orders.Returns[!duplicated(Orders.Returns$Order.ID),]
+```{r}
+Customer.table = Orders.Returns%>%
+  select(Customer.Name, Order.Date) %>%
+  group_by(.,Customer.Name) %>%
+  summarise(Count=n()) 
+
+nrow(Customer.table[Customer.table$Count>1,])#448 customer return more than once
+nrow(Customer.table[Customer.table$Count>5,])#124 customer retrun more than 5 times
+```
+#Answer 3.2: Which regions are more likely to return orders?
+```{r}
+Orders.addReturns<-merge(Orders,Returns,by="Order.ID",all=TRUE)
+Region.table1 = Orders.addReturns%>%
+  filter(Returned=="Yes") %>%
+  group_by(.,Region.x) %>%
+  summarise(Count=n()) 
+
+Region.table2 = Orders.addReturns%>%
+  group_by(.,Region.x) %>%
+  summarise(Count=n()) 
+
+Region.table = merge(Region.table1,Region.table2, by="Region.x")
+
+Region.table$Rate = Region.table$Count.x/Region.table$Count.y
+
+Region.table %>%
+  top_n(n = 3) 
+
+```
+# Answer 3.3: Eastern Asia,Southern Europe,Western US are mostly likely to return
+
+#3.4. Which categories (sub-categories) of products are more likely to be returned?
+
+- ***Hint:*** Merge the **Returns** dataframe with the **Orders** dataframe using `Order.ID`.
+```{r}
+Category.table11 = Orders.addReturns%>%
+  filter(Returned=="Yes") %>%
+  group_by(.,Category, Sub.Category) %>%
+  summarise(Count = n()) 
+
+Category.table22 = Orders.addReturns%>%
+  group_by(.,Category, Sub.Category) %>%
+  summarise(Count = n()) 
+
+Category.table00 = merge(Category.table11,Category.table22, by="Sub.Category")
+
+Category.table00$Rate = Category.table00$Count.x/Category.table00$Count.y
+
+Category.table00 %>%
+  arrange(desc(Category.table00$Rate)) %>%
+  top_n(n = 3) 
+
+```
+# Answer 3.4: Using order numbers,
+# Labels(Office Supplies), Tables(Furniture) and Accessories(Technology) are mostly likely to be returned
+```{r}
+Category.table1 = Orders.addReturns%>%
+  filter(Returned=="Yes") %>%
+  group_by(.,Category, Sub.Category) %>%
+  summarise(Number=sum(Quantity)) 
+
+Category.table2 = Orders.addReturns%>%
+  group_by(.,Category, Sub.Category) %>%
+  summarise(Number=sum(Quantity)) 
+
+Category.table = merge(Category.table1,Category.table2, by="Sub.Category")
+
+Category.table$Rate = Category.table$Number.x/Category.table$Number.y
+
+Category.table %>%
+  arrange(desc(Category.table$Rate)) %>%
+  top_n(n = 3) 
+```
+
+# Answer 3.4: Using total quantities,
+# Labels(Office Supplies),Tables(Furniture) and Art(Office Supplies) are mostly likely to be returned
+```{r}
+
+```
+## Part II: Machine Learning and Business Use Case
+
+Now your manager has a basic understanding of why customers returned orders. Next, he wants you to use machine learning to predict which orders are most likely to be returned. In this part, you will generate several features based on our previous findings and your manager's requirements.
+
+### Problem 4: Feature Engineering
+#### Step 1: Create the dependent variable
+- First of all, we need to generate a categorical variable which indicates whether an order has been returned or not.
+- ***Hint:*** the returned orders' IDs are contained in the dataset "returns"
+```{r}
+
+#Orders.addReturns$Return <- as.numeric(Orders.addReturns$Returned == "Yes")
+Orders.addReturns$Return <-0
+Orders.addReturns$Return[Orders.addReturns$Returned=="Yes"]<-1
+#created new dummy variable Return
+head(Orders.addReturns)
+```
+#### Step 2:
+- Your manager believes that **how long it took the order to ship** would affect whether the customer would return it or not. 
+- He wants you to generate a feature which can measure how long it takes the company to process each order.
+- ***Hint:*** Process.Time = Ship.Date - Order.Date
+```{r}
+Orders.addReturns$Process.Time = Orders.addReturns$Ship.Date - Orders.addReturns$Order.Date
+head(Orders.addReturns)
+
+```
+
+
+```{r}
+process.return <- Orders.addReturns%>%
+  group_by(.,Process.Time,Return) %>%
+  summarise(Number=n()) 
+
+ggplot(data=process.return, aes(x=Process.Time, y=Number, group=Return))+
+  geom_line(aes(color=Return))+
+  geom_point(aes(color=Return))+
+  xlab("Process Time")+
+  ylab("Number")
+```
+
+
+```{r}
+logit.Process.Time = glm(Return ~ Process.Time, family = "binomial", data = Orders.addReturns)
+summary(logit.Process.Time)
+```
+# The cofficient for Process.Time is not significant. We cannot reject the null hyphothesis that the process time affects return decision
+```
+#### Step 3:
+- If a product has been returned before, it may be returned again. 
+- Let us generate a feature indictes how many times the product has been returned before.
+- If it never got returned, we just impute using 0.
+- ***Hint:*** Group by different Product.ID
+```
+
+```{r}
+#Need to sum all the quantity for the return
+# Orders.addReturns%>%
+#   group_by(.,Product.ID,Return) %>%
+#   summarise(Number=sum(Quantity)) %>%
+#   filter(Return==1, Number>1) %>%
+#   arrange(desc(Number))
+
+#list out by the return date
+Orders.addReturns%>%
+ group_by(.,Product.ID,Return,Order.Date) %>%
+  arrange(desc(Order.Date)) %>%
+  filter(Return==1)
+
+```
+### Problem 5: Fitting Models
+- You can use any binary classification method you have learned so far.
+- Use 80/20 training and test splits to build your model. 
+- Double check the column types before you fit the model.
+- Only include useful features. i.e all the `ID`s should be excluded from your training set.
+- Not that there are only less than 5% of the orders have been returned, so you should consider using the `createDataPartition` function from `caret` package that does a **stratified** random split of the data. Scikit-learn also has a [StratifiedKfold](http://scikit-learn.org/stable/modules/generated/sklearn.model_selection.StratifiedKFold.html#sklearn-model-selection-stratifiedkfold) function that does similar thing.
+- Do forget to `set.seed()` before the spilt to make your result reproducible.
+- **Note:** We are not looking for the best tuned model in the lab so don't spend too much time on grid search. Focus on model evaluation and the business use case of each model.
+
+```{r}
+library(tree)
+library(caret)
+
+head(Orders.addReturns)
+
+#Fit a tree to the data; note that we are excluding Sales from the formula.
+tree.return = tree(High ~ . - Sales, split = "gini", data = Carseats)
+
+```
+### Problem 6: Evaluating Models
+- What is the best metric to evaluate your model. Is accuracy good for this case?
+- Now you have multiple models, which one would you pick? 
+- Can you get any clue from the confusion matrix? What is the meaning of precision and recall in this case? Which one do you care the most? How will your model help the manager make decisions?
+- **Note:** The last question is open-ended. Your answer could be completely different depending on your understanding of this business problem.
+
+```{r}
+
+```
+### Problem 7: Feature Engineering Revisit
+- Is there anything wrong with the new feature we generated? How should we fix it?
+- ***Hint***: For the real test set, we do not know it will get returned or not.
+
+```{r}
+
+```
+
+```{r}
+
+```
+
