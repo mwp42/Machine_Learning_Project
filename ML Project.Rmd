@@ -1,0 +1,87 @@
+---
+title: "Machine Learning Kaggle Project - Team Confidence Squared"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Part I: Preprocessing and EDA
+Load the datasets
+
+
+```{r, echo=FALSE}
+Train <- read.table("./train.csv",head = T, sep = ',')
+Test <- read.table("./test.csv",head = T, sep=',')
+```
+## Part I: Preprocessing and EDA
+
+sqrt LotArea has a little higher correlation than LotArea
+```{r}
+cor(sqrt(Train$LotArea),log(Train$SalePrice))
+```
+#can use log to normalize Sales Price
+```{r}
+hist(log(Train$SalePrice))
+```
+
+```{r}
+colnames(Train)[1]
+```
+#For column 
+```{r}
+#missing GarageYrBlt should equal to YearBuilt
+Train$GarageYrBlt[is.na(Train$GarageYrBlt)] = Train$YearBuilt
+
+
+#For training set in several columns, missing value should assign "NA" value as a category, using myFun1
+Traingroup1 <-Train[,c("Alley","BsmtQual","BsmtCond","BsmtExposure","BsmtFinType1","BsmtFinType2","FireplaceQu","GarageType","GarageFinish","GarageQual","GarageCond","PoolQC","Fence","MiscFeature")]
+
+library(dplyr)
+Traingroup2 <-Train[,!(colnames(Train) %in% c("Alley","BsmtQual","BsmtCond","BsmtExposure","BsmtFinType1","BsmtFinType2","FireplaceQu","GarageType","GarageFinish","GarageQual","GarageCond","PoolQC","Fence","MiscFeature"))]
+
+myFun1 <- function(x) {
+  
+    x[is.na(x)] <- "NA"
+  
+}
+
+myFun2 <- function(x) {
+  
+  if (is.numeric(x)) {
+    x[is.na(x)] <- mean(x, na.rm = TRUE)
+    x
+  } else {
+    x[is.na(x)] <- names(which.max(table(x)))
+    x
+  }
+}
+
+library(data.table)
+
+Traingroup1=data.table(Traingroup1)
+Traingroup2=data.table(Traingroup2)
+
+Traingroup1[, lapply(.SD, myFun1)]
+
+
+Traingroup2[, lapply(.SD, myFun2)]
+
+#get the new training group without NA
+nt=cbind(Traingroup1,Traingroup2)
+
+
+
+```
+
+
+
+
+```{r2, echo=FALSE}
+
+
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
