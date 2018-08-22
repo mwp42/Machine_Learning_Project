@@ -17,38 +17,19 @@ Test <- read.table("./test.csv",head = T, sep=',')
 ```
 ## Part I: Preprocessing and EDA
 
-sqrt LotArea has a little higher correlation than LotArea
+#Clean missing value for training data
 ```{r}
-cor(sqrt(Train$LotArea),log(Train$SalePrice))
-```
-#can use log to normalize Sales Price
-```{r}
-hist(log(Train$SalePrice))
-```
-
-```{r}
-colnames(Train)[1]
-```
-#For column 
-```{r}
-#missing GarageYrBlt should equal to YearBuilt
-Train$GarageYrBlt[is.na(Train$GarageYrBlt)] = Train$YearBuilt
-
-
-#For training set in several columns, missing value should assign "NA" value as a category, using myFun1
-Traingroup1 <-Train[,c("Alley","BsmtQual","BsmtCond","BsmtExposure","BsmtFinType1","BsmtFinType2","FireplaceQu","GarageType","GarageFinish","GarageQual","GarageCond","PoolQC","Fence","MiscFeature")]
-
 library(dplyr)
-Traingroup2 <-Train[,!(colnames(Train) %in% c("Alley","BsmtQual","BsmtCond","BsmtExposure","BsmtFinType1","BsmtFinType2","FireplaceQu","GarageType","GarageFinish","GarageQual","GarageCond","PoolQC","Fence","MiscFeature"))]
+library(data.table)
 
-myFun1 <- function(x) {
-  
-    x[is.na(x)] <- "NA"
-  
+#add "None" as a leve for group1
+addLevel <- function(x){
+  if(is.factor(x)) return(factor(x, levels=c(levels(x), "None")))
+  return(x)
 }
 
-myFun2 <- function(x) {
-  
+#For the rest columns, qualitative assign the most frequest, quantitative assign mean
+missFun1 <- function(x) {
   if (is.numeric(x)) {
     x[is.na(x)] <- mean(x, na.rm = TRUE)
     x
@@ -58,30 +39,48 @@ myFun2 <- function(x) {
   }
 }
 
-library(data.table)
+#Transform: fill missing and remove some columns
+transFun <- function(t) {
 
-Traingroup1=data.table(Traingroup1)
-Traingroup2=data.table(Traingroup2)
+#missing GarageYrBlt should equal to YearBuilt
+t$GarageYrBlt[is.na(t$GarageYrBlt)] = t$YearBuilt[is.na(t$GarageYrBlt)]
 
-Traingroup1[, lapply(.SD, myFun1)]
+#For training set in several columns, missing value should assign "None" value as a category, using myFun1
+group1 <-t[,c("Alley","BsmtQual","BsmtCond","BsmtExposure","BsmtFinType1","BsmtFinType2","FireplaceQu","GarageType","GarageFinish","GarageQual","GarageCond","PoolQC","Fence","MiscFeature")]
 
+group2 <-t[,!(colnames(t) %in% c("Alley","BsmtQual","BsmtCond","BsmtExposure","BsmtFinType1","BsmtFinType2","FireplaceQu","GarageType","GarageFinish","GarageQual","GarageCond","PoolQC","Fence","MiscFeature"))]
 
-Traingroup2[, lapply(.SD, myFun2)]
+group1 <- as.data.frame(lapply(group1, addLevel))
 
-#get the new training group without NA
-nt=cbind(Traingroup1,Traingroup2)
+group1[is.na(group1)] <- "None"
 
+group2=data.table(group2)
+group2[, lapply(.SD, missFun1)]
+
+#get the new training group without missing value
+newt=cbind(group1,group2)
+
+#deselect some columns
+newt <-newt[,!(colnames(newt) %in% c("MiscFeature","Fence","PoolQC","Alley","Street","Utilities","Condition2","RoofMatl","ID","PoolArea"))]
+
+return(newt)
+
+}
+
+#Transform training set
+nTrain=transFun(Train)
 
 
 ```
 
 
+```{r}
+library(Hmisc)
+describe(nTrain)
 
-
-```{r2, echo=FALSE}
-
-
+```
+#use random forest
+```{r}
 
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
