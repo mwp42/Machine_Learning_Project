@@ -28,10 +28,11 @@ addLevel <- function(x){
   return(x)
 }
 
-#For the rest columns, qualitative assign the most frequest, quantitative assign mean
+#For the rest columns, qualitative assign the most frequest, quantitative assign 0
 missFun1 <- function(x) {
   if (is.numeric(x)) {
-    x[is.na(x)] <- mean(x, na.rm = TRUE)
+    x[is.na(x)] <- 0
+      #mean(x, na.rm = TRUE)
     x
   } else {
     x[is.na(x)] <- names(which.max(table(x)))
@@ -61,7 +62,7 @@ group2[, lapply(.SD, missFun1)]
 newt=cbind(group1,group2)
 
 #deselect some columns
-newt <-newt[,!(colnames(newt) %in% c("MiscFeature","Fence","PoolQC","Alley","Street","Utilities","Condition2","RoofMatl","ID","PoolArea"))]
+newt <-newt[,!(colnames(newt) %in% c("MiscFeature","Fence","PoolQC","Alley","Street","Utilities","Condition2","RoofMatl","Id","PoolArea","LotFrontage"))]
 
 return(newt)
 
