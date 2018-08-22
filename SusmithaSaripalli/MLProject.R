@@ -81,8 +81,10 @@ transFun <- function(t) {
 nTrain = transFun(dtrain)
 nTest = transFun(dtest)
 
+# Quick fix for errors
 nTrain1 <- nTrain[complete.cases(nTrain), ]
-# Implementing Random Forest
-model1 <- randomForest(SalePrice ~ ., data = nTrain1, ntree = 500, mtry = 69, importance = TRUE)
-model1
 
+# Implementing Random Forest
+model1 <- randomForest(SalePrice ~ ., data = nTrain1, ntree = 1000, mtry =10, importance = TRUE)
+model1
+varImpPlot(model1)
