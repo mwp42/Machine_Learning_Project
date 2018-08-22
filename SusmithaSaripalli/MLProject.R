@@ -1,37 +1,46 @@
 ### Machine Learning Project###
 ###    Confidence Squared   ###
 # 
-# Load Data
+
 library(dplyr)
 library(data.table)
+library(randomForest)
 
-dtest <- read.csv("/Users/susmithasaripalli/Documents/NYCDSA/machinelearningproj/all/test.csv", stringsAsFactors = FALSE)
-dtrain <- read.csv("/Users/susmithasaripalli/Documents/NYCDSA/machinelearningproj/all/train.csv", stringsAsFactors = FALSE)
+# Load Data
 
-dtrain <- subset(dtrain, select=-c(MiscFeature,Fence,PoolQC,Alley,Street,Utilities,Condition2,RoofMatl,ID,PoolArea))
-dtest <- subset(dtest, select=-c(MiscFeature,Fence,PoolQC,Alley,Street,Utilities,Condition2,RoofMatl,ID,PoolArea))
+dtest <- read.csv("/Users/susmithasaripalli/Documents/NYCDSA/machinelearningproj/all/test.csv", stringsAsFactors = TRUE)
+dtrain <- read.csv("/Users/susmithasaripalli/Documents/NYCDSA/machinelearningproj/all/train.csv", stringsAsFactors = TRUE)
 
-#missing GarageYrBlt should equal to YearBuilt
-dtrain$GarageYrBlt[is.na(dtrain$GarageYrBlt)] = dtrain$YearBuilt[is.na(dtrain$GarageYrBlt)]
-dtest$GarageYrBlt[is.na(dtest$GarageYrBlt)] = dtrain$YearBuilt[is.na(dtest$GarageYrBlt)]
+# # Quick look at data
+# summary(dtest)
+# describe(dtest)
+# summary(dtrain)
+# describe(dtrain)
+# # Plot missingness
+# image(is.na(dtest), main = "Missing Values", xlab = "Observation", ylab = "Variable", 
+#       xaxt = "n", yaxt = "n", bty = "n")
+# axis(1, seq(0, 1, length.out = nrow(dtest)), 1:nrow(dtest), col = "white")
+# axis(2, c(0, 0.5, 1), names(dtest), col = "white", las = 2)
+# 
+# image(is.na(dtrain), main = "Missing Values", xlab = "Observation", ylab = "Variable", 
+#       xaxt = "n", yaxt = "n", bty = "n")
+# axis(1, seq(0, 1, length.out = nrow(dtrain)), 1:nrow(dtrain), col = "white")
+# axis(2, c(0, 0.5, 1), names(dtrain), col = "white", las = 2)
 
-#For training set in several columns, missing value should assign "NA" value as a category, using myFun1
-Traingroup1 <-dtrain[,c("BsmtQual","BsmtCond","BsmtExposure","BsmtFinType1","BsmtFinType2","FireplaceQu","GarageType","GarageFinish","GarageQual","GarageCond")]
-Traingroup2 <-dtrain[,!(colnames(dtrain) %in% c("BsmtQual","BsmtCond","BsmtExposure","BsmtFinType1","BsmtFinType2","FireplaceQu","GarageType","GarageFinish","GarageQual","GarageCond"))]
 
-Testgroup1 <-dtest[,c("BsmtQual","BsmtCond","BsmtExposure","BsmtFinType1","BsmtFinType2","FireplaceQu","GarageType","GarageFinish","GarageQual","GarageCond")]
-Testgroup1 <-dtest[,!(colnames(dtrain) %in% c("BsmtQual","BsmtCond","BsmtExposure","BsmtFinType1","BsmtFinType2","FireplaceQu","GarageType","GarageFinish","GarageQual","GarageCond"))]
+# Defining cleaning functions:
 
-myFun1 <- function(x) {
-  
-  x[is.na(x)] <- "None"
-  
+# add "None" as a level for group1
+addLevel <- function(x){
+  if(is.factor(x)) return(factor(x, levels=c(levels(x), "None")))
+  return(x)
 }
 
-myFun2 <- function(x) {
-  
+# For the rest columns, qualitative assign the most frequest, quantitative assign 0
+missFun1 <- function(x) {
   if (is.numeric(x)) {
-    x[is.na(x)] <- mean(x, na.rm = TRUE)
+    x[is.na(x)] <- 0
+    #mean(x, na.rm = TRUE)
     x
   } else {
     x[is.na(x)] <- names(which.max(table(x)))
@@ -39,24 +48,41 @@ myFun2 <- function(x) {
   }
 }
 
+# Transform: fill missing and remove some columns
+transFun <- function(t) {
+  
+  t <- subset(t, select=-c(MiscFeature,Fence,PoolQC,Alley,Street,Utilities,Condition2,RoofMatl,Id,PoolArea,LotFrontage))
+  
+  # missing GarageYrBlt should equal YearBuilt
+  t$GarageYrBlt[is.na(t$GarageYrBlt)] = t$YearBuilt[is.na(t$GarageYrBlt)]
+  
+  # Separating groups for different functions
+  cols = c("BsmtQual","BsmtCond","BsmtExposure","BsmtFinType1","BsmtFinType2","FireplaceQu","GarageType","GarageFinish","GarageQual","GarageCond")
+  group1 <-t[,cols]
+  group2 <-t[,!(colnames(t) %in% cols)]
+  
+  # adding "None" level
+  group1 <- as.data.frame(lapply(group1, addLevel))
+  group1[is.na(group1)] <- "None"
+  
+  # Assigning 0 or most regularly occuring value to variable
+  group2=data.table(group2)
+  group2[, lapply(.SD, missFun1)]
+    
+  # combine the two groups
+  newt=cbind(group1,group2)
+  
+  
+  return(newt)
+  
+}
 
+# Process Test set and Training set in the same way
+nTrain = transFun(dtrain)
+nTest = transFun(dtest)
 
-Traingroup1=data.table(Traingroup1)
-Traingroup2=data.table(Traingroup2)
+nTrain1 <- nTrain[complete.cases(nTrain), ]
+# Implementing Random Forest
+model1 <- randomForest(SalePrice ~ ., data = nTrain1, ntree = 500, mtry = 69, importance = TRUE)
+model1
 
-Traingroup1[, lapply(.SD, myFun1)]
-Traingroup2[, lapply(.SD, myFun2)]
-
-Testgroup1=data.table(Testgroup1)
-Testgroup2=data.table(Testgroup2)
-
-Testgroup1[, lapply(.SD, myFun1)]
-Testgroup2[, lapply(.SD, myFun2)]
-#get the new training group without NA
-toTrain = cbind(Traingroup1,Traingroup2)
-toTest = cbind(Testgroup1,Testgroup2)
-
-image(is.na(dtest), main = "Missing Values", xlab = "Observation", ylab = "Variable", 
-      xaxt = "n", yaxt = "n", bty = "n")
-axis(1, seq(0, 1, length.out = nrow(dtest)), 1:nrow(dtest), col = "white")
-axis(2, c(0, 0.5, 1), names(dtest), col = "white", las = 2)
