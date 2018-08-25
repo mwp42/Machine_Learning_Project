@@ -1979,6 +1979,37 @@ LassoPred <- predict(lasso_mod, test1)
 predictions_lasso <- exp(LassoPred) #need to reverse the log to the real values
 head(predictions_lasso)
 ```
+##RandomForest model
+```{r}
+#separate training and testing dataset from the available data
+
+library(caret)
+x_train=train1
+y_train=all$SalePrice[!is.na(all$SalePrice)]
+train=cbind(x_train,y_train)
+names(train) <- make.names(names(train))
+
+set.seed(123)
+partition <- createDataPartition(y=y_train,
+                                 p=.5,
+                                 list=F)
+colnames(training)
+
+training <- train[partition,]
+testing <- train[-partition,]
+library(randomForest)
+
+model_1 <- randomForest(y_train~ ., data=training)
+
+
+# Predict using the test set
+prediction <- predict(model_1, testing)
+model_output <- cbind(testing, prediction)
+
+#Test with RMSE
+library(Metrics)
+rmse(model_output$y_train,model_output$prediction)
+```
 
 ##XGBoost model
 
