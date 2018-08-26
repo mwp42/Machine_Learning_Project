@@ -1,0 +1,149 @@
+---
+title: "Machine Learning Kaggle Project - Team Confidence Squared"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Part I: Preprocessing and EDA
+Load the datasets
+
+
+```{r, echo=FALSE}
+Train <- read.table("./train.csv",head = T, sep = ',')
+Test <- read.table("./test.csv",head = T, sep=',')
+testpx = read.table("sample_submission.csv", stringsAsFactors = TRUE)
+```
+## Part I: Preprocessing and EDA
+
+#Clean missing value for training data
+```{r}
+library(dplyr)
+library(data.table)
+
+#add "None" as a leve for group1
+addLevel <- function(x){
+  if(is.factor(x)) return(factor(x, levels=c(levels(x), "None")))
+  return(x)
+}
+
+#For the rest columns, qualitative assign the most frequest, quantitative assign 0
+missFun1 <- function(x) {
+  if (is.numeric(x)) {
+    x[is.na(x)] <- 0
+      #mean(x, na.rm = TRUE)
+    x
+  } else {
+    x[is.na(x)] <- names(which.max(table(x)))
+    x
+  }
+}
+
+#Transform: fill missing and remove some columns
+transFun <- function(t) {
+
+#missing GarageYrBlt should equal to YearBuilt
+t$GarageYrBlt[is.na(t$GarageYrBlt)] = t$YearBuilt[is.na(t$GarageYrBlt)]
+
+#For training set in several columns, missing value should assign "None" value as a category, using myFun1
+group1 <-t[,c("Alley","BsmtQual","BsmtCond","BsmtExposure","BsmtFinType1","BsmtFinType2","FireplaceQu","GarageType","GarageFinish","GarageQual","GarageCond","PoolQC","Fence","MiscFeature")]
+
+group2 <-t[,!(colnames(t) %in% c("Alley","BsmtQual","BsmtCond","BsmtExposure","BsmtFinType1","BsmtFinType2","FireplaceQu","GarageType","GarageFinish","GarageQual","GarageCond","PoolQC","Fence","MiscFeature"))]
+
+group1 <- as.data.frame(lapply(group1, addLevel))
+
+group1[is.na(group1)] <- "None"
+
+group2=data.table(group2)
+group2<-group2[, lapply(.SD, missFun1)]
+
+#get the new training group without missing value
+newt=cbind(group1,group2)
+
+#deselect some columns
+newt <-newt[,!(colnames(newt) %in% c("MiscFeature","Fence","PoolQC","Alley","Street","Utilities","Condition2","RoofMatl","Id","PoolArea","LotFrontage"))]
+
+return(newt)
+
+}
+
+
+```
+
+#Prepare training set
+```{r}
+#Transform training set
+nTrain=transFun(Train)
+nTest=transFun(Test)
+
+#make log of SalePrice as the predict variable in nlTrain dataset
+nTrain$logSalePrice <- log(nTrain$SalePrice)
+train<-nTrain[,-which(names(nTrain) == "SalePrice")] 
+
+#y_train and train have separate y and all x
+y_train<-train$logSalePrice
+
+
+#separate training and testing dataset from the available data
+library(caret)
+set.seed(123)
+partition <- createDataPartition(y=y_train,
+                                 p=.5,
+                                 list=F)
+training <- train[partition,]
+testing <- train[-partition,]
+
+
+```
+
+#run Linear regression
+```{r}
+lm_model_1 <- lm(logSalePrice ~ ., data=training)
+summary(lm_model_1)
+```
+#R square is not bad, will choose some variables and try to remove collinarity
+```{r}
+lm_model_2 <- lm(logSalePrice ~ WoodDeckSF+GarageCars+Functional+KitchenQual+X1stFlrSF+X2ndFlrSF+
+                   Heating+BsmtFinSF1+MasVnrType+Neighborhood+YearBuilt+OverallCond+YearRemodAdd+SaleType+
+                   Exterior1st+OverallQual+HouseStyle+
+                   MSZoning+LotArea+BsmtExposure, data=training)
+summary(lm_model_2)
+
+```
+
+
+```{r}
+lm_model_2$xlevels[["Heating"]] <- union(lm_model_2$xlevels[["Heating"]], levels(testing$Heating))
+lm_model_2$xlevels[["SaleType"]] <- union(lm_model_2$xlevels[["SaleType"]], levels(testing$SaleType))
+lm_model_2$xlevels[["Exterior1st"]] <- union(lm_model_2$xlevels[["Exterior1st"]], levels(testing$Exterior1st))
+prediction <- predict(lm_model_2, testing, type="response", se.fit=FALSE)
+model_output <- cbind(testing, prediction)
+
+#Test with RMSE
+
+library(Metrics)
+rmse(model_output$logSalePrice,model_output$prediction)
+
+```
+#use random forest
+```{r}
+
+library(tree)
+library(randomForest)
+model_1 <- randomForest(logSalePrice ~ ., data=training)
+
+
+# Predict using the test set
+prediction <- predict(model_1, testing)
+model_output <- cbind(testing, prediction)
+
+
+#Test with RMSE
+
+rmse(model_output$logSalePrice,model_output$prediction)
+```
+
+```
+
