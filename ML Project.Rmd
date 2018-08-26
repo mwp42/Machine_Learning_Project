@@ -7,23 +7,69 @@ output: github_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+```{r}
+# clear Workspace
+rm(list = ls())
+
+library(dplyr)
+library(data.table)
+library(plyr)
+library(knitr)
+library(ggplot2)
+library(corrplot)
+library(caret)
+library(gridExtra)
+library(scales)
+library(Rmisc)
+library(ggrepel)
+library(randomForest)
+library(psych)
+library(xgboost)
+```
+
 ## Part I: Preprocessing and EDA
-Load the datasets
+#1.1 Load the datasets
 
 
 ```{r, echo=FALSE}
 Train <- read.table("./train.csv",head = T, sep = ',')
 Test <- read.table("./test.csv",head = T, sep=',')
-testpx = read.table("sample_submission.csv", stringsAsFactors = TRUE)
+
 ```
-## Part I: Preprocessing and EDA
 
-#Clean missing value for training data
+
+#1.2 combine train and test, check columns having missing values
 ```{r}
-library(dplyr)
-library(data.table)
+#Getting rid of the IDs but keeping the test IDs in a vector. These are needed to compose the submission file
+test_labels <- Test$Id
 
-#add "None" as a leve for group1
+Test$SalePrice <- NA
+Train$Id <- NULL
+Test$Id <- NULL
+all <- rbind(Train, Test)
+dim(all)
+
+NAcol <- which(colSums(is.na(all)) > 0)
+sort(colSums(sapply(all[NAcol], is.na)), decreasing = TRUE)
+sapply(all[NAcol], class)
+cat('There are', length(NAcol), 'columns with missing values')
+```
+# misssing MasVnrArea and MasVnrType should be 0 and None
+```{r}
+Train$MasVnrType[is.na(Train$MasVnrArea)]
+Test$MasVnrType[is.na(Test$MasVnrArea)]
+```
+
+#1.3 Clean missing value for training data
+#GarageYrBlt should be the same as YearBuild
+#group1 missing NA value
+#For the rest group2:
+#Numeric value missing should be added 0 
+#Factor value missing using the most frequent
+
+```{r}
+
+#add "None" as a level for group1
 addLevel <- function(x){
   if(is.factor(x)) return(factor(x, levels=c(levels(x), "None")))
   return(x)
@@ -41,11 +87,18 @@ missFun1 <- function(x) {
   }
 }
 
-#Transform: fill missing and remove some columns
-transFun <- function(t) {
+#Summarized function (missFun): fill missing and remove some columns
+missFun <- function(t) {
 
 #missing GarageYrBlt should equal to YearBuilt
 t$GarageYrBlt[is.na(t$GarageYrBlt)] = t$YearBuilt[is.na(t$GarageYrBlt)]
+
+# if the houses with veneer area NA are also NA in the veneer type,
+  # find the one that should have a MasVnrType,
+  # assign the veneer as the most popular (that is not none)
+  if(length(which(is.na(t$MasVnrType) & !is.na(t$MasVnrArea)))>0){
+    t[is.na(t$MasVnrType) & !is.na(t$MasVnrArea),]$MasVnrType <- names(sort(-table(t$MasVnrType)))[2]
+  } #train
 
 #For training set in several columns, missing value should assign "None" value as a category, using myFun1
 group1 <-t[,c("Alley","BsmtQual","BsmtCond","BsmtExposure","BsmtFinType1","BsmtFinType2","FireplaceQu","GarageType","GarageFinish","GarageQual","GarageCond","PoolQC","Fence","MiscFeature")]
@@ -62,88 +115,497 @@ group2<-group2[, lapply(.SD, missFun1)]
 #get the new training group without missing value
 newt=cbind(group1,group2)
 
-#deselect some columns
-newt <-newt[,!(colnames(newt) %in% c("MiscFeature","Fence","PoolQC","Alley","Street","Utilities","Condition2","RoofMatl","Id","PoolArea","LotFrontage"))]
-
 return(newt)
 
 }
 
+#Fill in missing data 
+
+Train$Id <- NULL
+Test$SalePrice <- NULL
+nTrain=missFun(Train)
+nTest=missFun(Test)
+
+```
+#1.4 Transform Existing variables
+#check different typies of variables
+```{r}
+numericVars <- which(sapply(nTrain, is.numeric)) #index vector numeric variables
+numericVarNames <- names(numericVars) #saving names vector numericVarNames for use later on
+cat('There are', length(numericVars), 'numeric variables')
+
+factorVars <- which(sapply(nTrain, is.factor)) #index vector factor variables
+factorVarNames <- names(numericVars) #saving names vector factorVarNames for use later on
+cat(' and there are', length(factorVars), 'factor variables in Train dataset')
+
+```
+#Transform levels for variables shows different quality
+#Transform MSSubClass into factor variable}
+
+```{r}
+#For the rest columns, qualitative assign the most frequest, quantitative assign 0
+transFun1 <- function(x) {
+  
+  if (is.integer(x)) {
+    x<-as.integer(x)
+    x
+    } 
+
+  else if (is.factor(x)) {
+      x<-as.factor(x)
+      x
+  } 
+  x
+}
+    
+# Defining levels (from data description)
+Qual_lev <- c('None' = 0, 'Po' = 1, 'Fa' = 2, 'TA' = 3, 'Gd' = 4, 'Ex' = 5)
+# for ExterQual, ExterCond, BsmtQual, BsmtCond, HeatingQC, KitchenQual,FireplaceQu, GarageQual, GarageCond, PoolQC
+BsmtFin_lev <- c('None' = 0, 'Unf' = 1, 'LwQ' = 2, 'Rec' = 3, 'BLQ' = 4, 'ALQ' = 5, 'GLQ' = 6)
+# for BsmtFinType1, BsmtFinType2
+BsmtExp_lev <- c('None' = 0, 'No' = 1, 'Mn' = 2, 'Av' = 3, 'Gd' = 4)
+# for BsmtExposure
+Func_lev <- c('Sal' = 0, 'Sev' = 1, 'Maj2' = 2, 'Maj1' = 3, 'Mod' = 4, 'Min2' = 5, 'Min1' = 6, 'Typ' = 7)
+# for Functional
+
+transFun <- function(t) {
+  
+  col1 <- c('ExterQual','ExterCond','BsmtQual','BsmtCond','HeatingQC','KitchenQual','FireplaceQu','GarageQual','GarageCond', 'PoolQC')
+  col2 <- c('BsmtFinType1','BsmtFinType2','BsmtExposure','MiscFeature','Alley','Fence', 'GarageType','GarageFinish', 'Functional')
+  col3 <- c('MasVnrType','MSSubClass','YrSold','MoSold','YearBuilt','YearRemodAdd')
+  colT <- append(col1, col2)
+  colT <- append(colT, col3)
+  
+  group1 <- subset(t, select=col1) #train
+  group2 <- subset(t, select=col2) #train
+  group3 <- subset(t, select=col3) #train
+  group4 <- t[,!(colnames(t) %in% colT)] #train
+
+  group1 <- as.data.frame(
+    lapply(group1, function(x) {
+      revalue(x,Qual_lev)
+    })) #train
+  
+  group1<-lapply(group1, as.integer)
+  
+  group2$BsmtFinType1 <- as.integer(revalue(group2$BsmtFinType1, BsmtFin_lev)) #train
+  group2$BsmtFinType2 <- as.integer(revalue(group2$BsmtFinType2, BsmtFin_lev)) #train
+  group2$BsmtExposure <- as.integer(revalue(group2$BsmtExposure, BsmtExp_lev)) #train
+  group2$MiscFeature <- as.factor(group2$MiscFeature) #train
+  group2$Alley <- as.factor(group2$Alley) #train
+  group2$Fence <- as.factor(group2$Fence) #train
+  group2$GarageType <- as.factor(group2$GarageType) #train
+  group2$GarageFinish <- as.factor(group2$GarageFinish) #train
+  group2$Functional <- as.integer(revalue(group2$Functional, Func_lev)) #train
+  
+  group3<-lapply(group3, as.factor)
+  
+  group4<-lapply(group4, transFun1)
+  
+  # group3$MasVnrType <- as.factor(group3$MasVnrType) #train
+  # #Transform MSSubClass into factor variable
+  # group3$MSSubClass <- as.factor(group3$MSSubClass)
+  # group3$YrSold <- as.factor(group3$YrSold)
+  # group3$YearBuild <- as.factor(group3$YearBuild)
+  # group3$YearRemodAdd <- as.factor(group3$YearRemodAdd)
+  
+  newt <- cbind(group1,group2,group3, group4) #train
+  
+  
+  return(newt)
+}
+
+#Transform training set
+nTrain=transFun(nTrain)
+
+nTest=transFun(nTest)
 
 ```
 
-#Prepare training set
+
+#1.4 Feature Engineering
+#Function featureFun
+
 ```{r}
-#Transform training set
-nTrain=transFun(Train)
-nTest=transFun(Test)
+featureFun <- function(t) {
+  
+  #calculate total bathrooms
+  t <- t %>% mutate(
+    TotalBath = FullBath + HalfBath*0.5 + BsmtFullBath + BsmtHalfBath*0.5)
+  
+  #whether house is new or not
+  t <- t %>% mutate(
+     IsNew = ifelse(as.numeric(t$YrSold)==as.numeric(t$YearBuilt), 1, 0))
+  t$IsNew <- as.factor(t$IsNew)
 
-#make log of SalePrice as the predict variable in nlTrain dataset
-nTrain$logSalePrice <- log(nTrain$SalePrice)
-train<-nTrain[,-which(names(nTrain) == "SalePrice")] 
+  #0=No Remodeling, 1=Remodeling
+  t <- t %>% mutate(
+    Remodel = ifelse(as.numeric(t$YearBuilt)==as.numeric(t$YearRemodAdd), 0, 1))
+  t$Remodel <- as.factor(t$Remodel)
+  
+  #total age of the house after built/remodeled
+  t <- t %>% mutate(
+    Age = as.numeric(t$YrSold)-as.numeric(t$YearRemodAdd))
 
-#y_train and train have separate y and all x
-y_train<-train$logSalePrice
+  #total square feet
+  t <- t %>% mutate(
+    TotalSqFeet = GrLivArea + TotalBsmtSF)
+
+  #Consolidating Porch variables
+  t <- t %>% mutate(
+    TotalPorchSF = OpenPorchSF + EnclosedPorch + X3SsnPorch + ScreenPorch)
+
+  #did not check neighbourhood
+  
+}
+nTrain<-featureFun(nTrain)
+nTest<-featureFun(nTest)
+```
+#check finalized variables for training
+```{r}
+#check different typies of variables for training
+
+numericVars <- which(sapply(nTrain, is.numeric)) #index vector numeric variables
+numericVarNames <- names(numericVars) #saving names vector numericVarNames for use later on
+cat('There are', length(numericVars), 'numeric variables')
+sapply(nTrain[numericVars], class)
+
+factorVars <- which(sapply(nTrain, is.factor)) #index vector factor variables
+factorVarNames <- names(numericVars) #saving names vector factorVarNames for use later on
+cat(' and there are', length(factorVars), 'factor variables in Train dataset')
+sapply(nTrain[factorVars], class)
+
+```
+#1.5 Visualization of important variables
 
 
+##Correlations check
+
+Below I am checking the correlations again. As you can see, the number of variables with a correlation of at least 0.5 with the SalePrice has increased from 10 (see section 4.2.1) to 16. 
+
+```{r, out.width="100%"}
+all_numVar <- nTrain[, numericVars]
+cor_numVar <- cor(all_numVar, use="pairwise.complete.obs") #correlations of all numeric variables
+
+#sort on decreasing correlations with SalePrice
+cor_sorted <- as.matrix(sort(cor_numVar[,'SalePrice'], decreasing = TRUE))
+ #select only high corelations
+CorHigh <- names(which(apply(cor_sorted, 1, function(x) abs(x)>0.5)))
+cor_numVar <- cor_numVar[CorHigh, CorHigh]
+
+corrplot.mixed(cor_numVar, tl.col="black", tl.pos = "lt", tl.cex = 0.7,cl.cex = .7, number.cex=.7)
+```
+#Preparing data for modeling
+
+<!-- ##Dropping highly correlated variables -->
+
+<!-- First of all, I am dropping a variable if two variables are highly correlated. To find these correlated pairs, I have used the correlations matrix again (see section 6.1). For instance: GarageCars and GarageArea have a correlation of 0.89. Of those two, I am dropping the variable with the lowest correlation with SalePrice (which is GarageArea with a SalePrice correlation of 0.62. GarageCars has a SalePrice correlation of 0.64). -->
+
+<!-- ```{r} -->
+<!-- dropVars <- c('YearRemodAdd', 'GarageYrBlt', 'GarageArea', 'GarageCond', 'TotalBsmtSF', 'TotalRmsAbvGrd', 'BsmtFinSF1') -->
+
+<!-- all <- all[,!(names(all) %in% dropVars)] -->
+<!-- ``` -->
+
+<!-- ##Removing outliers -->
+
+<!-- For the time being, I am keeping it simple and just remove the two really big houses with low SalePrice manually. However, I intend to investigate this more thorough in a later stage (possibly using the 'outliers' package). -->
+
+<!-- ```{r} -->
+<!-- all <- all[-c(524, 1299),] -->
+<!-- ``` -->
+
+##PreProcessing predictor variables
+
+Before modeling I need to center and scale the 'true numeric' predictors (so not variables that have been label encoded), and create dummy variables for the categorical predictors. Below, I am splitting the dataframe into one with all (true) numeric variables, and another dataframe holding the (ordinal) factors.
+
+```{r}
+nTrain1 = nTrain
+nTest1 = nTest
+nTest1$SalePrice <- NA
+
+all = rbind(nTrain, nTest1)
+
+DFnumeric <- all[, names(all) %in% numericVarNames]
+
+DFfactors <- all[, !(names(all) %in% numericVarNames)]
+
+DFfactors <- DFfactors[, names(DFfactors) != 'SalePrice']
+
+cat('There are', length(DFnumeric), 'numeric variables, and', length(DFfactors), 'factor variables')
+```
+
+###Skewness and normalizing of the numeric predictors
+
+**Skewness**
+Skewness is a measure of the symmetry in a distribution.  A symmetrical dataset will have a skewness equal to 0.  So, a normal distribution will have a skewness of 0. Skewness essentially measures the relative size of the two tails. As a rule of thumb, skewness should be between -1 and 1. In this range, data are considered fairly symmetrical. In order to fix the skewness, I am taking the log for all numeric predictors with an absolute skew greater than 0.8 (actually: log+1, to avoid division by zero issues).
+
+```{r}
+for(i in 1:ncol(DFnumeric)){
+        if (abs(skew(DFnumeric[,i]))>0.8){
+                DFnumeric[,i] <- log(DFnumeric[,i] +1)
+        }
+}
+```
+
+**Normalizing the data**
+```{r}
+PreNum <- preProcess(DFnumeric, method=c("center", "scale"))
+print(PreNum)
+```
+```{r}
+DFnorm <- predict(PreNum, DFnumeric)
+dim(DFnorm)
+```
+
+###One hot encoding the categorical variables
+
+The last step needed to ensure that all predictors are converted into numeric columns (which is required by most Machine Learning algorithms) is to 'one-hot encode' the categorical variables. This basically means that all (not ordinal) factor values are getting a seperate colums with 1s and 0s (1 basically means Yes/Present). To do this one-hot encoding, I am using the `model.matrix()` function.
+
+```{r}
+
+DFdummies <- as.data.frame(model.matrix(~.-1, DFfactors))
+dim(DFdummies)
+```
+
+###Removing levels with few or no observations in train or test
+
+In previous versions, I worked with Caret's `Near Zero Variance` function. Although this works, it also is a quick fix and too much information got lost. For instance, by using the defaults, all Neighborhoods with less than 146 houses are omitted as (one-hot encoded) variables (frequency ratio higher than 95/5). Therefore, I have taken amore carefull manual approach in this version.
+
+```{r}
+#check if some values are absent in the test set
+ZerocolTest <- which(colSums(DFdummies[(nrow(all[!is.na(all$SalePrice),])+1):nrow(all),])==0)
+colnames(DFdummies[ZerocolTest])
+DFdummies <- DFdummies[,-ZerocolTest] #removing predictors
+```
+
+```{r}
+#check if some values are absent in the train set
+ZerocolTrain <- which(colSums(DFdummies[1:nrow(all[!is.na(all$SalePrice),]),])==0)
+colnames(DFdummies[ZerocolTrain])
+DFdummies <- DFdummies[,-ZerocolTrain] #removing predictor
+```
+
+Also taking out variables with less than 10 'ones' in the train set.
+
+```{r}
+fewOnes <- which(colSums(DFdummies[1:nrow(all[!is.na(all$SalePrice),]),])<10)
+colnames(DFdummies[fewOnes])
+DFdummies <- DFdummies[,-fewOnes] #removing predictors
+dim(DFdummies)
+```
+
+Altogether, I have removed 49 one-hot encoded predictors with little or no variance. Altough this may seem a significant number, it is actually much less than the number of predictors that were taken out by using caret's`near zero variance` function (using its default thresholds).
+
+```{r}
+combined <- cbind(DFnorm, DFdummies) #combining all (now numeric) predictors into one dataframe 
+```
+
+##Dealing with skewness of response variable
+
+```{r}
+skew(all$SalePrice)
+```
+
+```{r}
+qqnorm(all$SalePrice)
+qqline(all$SalePrice)
+```
+
+The skew of 1.87 indicates a right skew that is too high, and the Q-Q plot shows that sale prices are also not normally distributed. To fix this I am taking the log of SalePrice.
+
+```{r}
+all$SalePrice <- log(all$SalePrice) #default is the natural logarithm, "+1" is not necessary as there are no 0's
+skew(all$SalePrice)
+```
+
+As you can see,the skew is now quite low and the Q-Q plot is also looking much better.
+
+```{r}
+qqnorm(all$SalePrice)
+qqline(all$SalePrice)
+```
+#Modeling
+```{r}
+
+train1 <- combined[!is.na(all$SalePrice),]
+test1 <- combined[is.na(all$SalePrice),]
+
+train11 = train1
+train1$SalePrice=NULL
+
+```
+##Lasso regression model
+
+I have also tried Ridge and Elastic Net models, but since lasso gives the best results of those 3 models I am only keeping the lasso model in the document.
+
+The elastic-net penalty is controlled by alpha, and bridges the gap between lasso (alpha=1) and ridge (alpha=0). The tuning parameter lambda controls the overall strength of the penalty. It is known that the ridge penalty shrinks the coefficients of correlated predictors towards each other while the lasso tends to pick one of them and discard the others.
+
+Below, I am using caret cross validation to find the best value for lambda, which is the only hyperparameter that needs to be tuned for the lasso model.
+#Modeling
+
+```{r}
+set.seed(27042018)
+my_control <-trainControl(method="cv", number=5)
+lassoGrid <- expand.grid(alpha = 1, lambda = seq(0.001,0.1,by = 0.0005))
+
+lasso_mod <- train(x=train1, y=all$SalePrice[!is.na(all$SalePrice)], method='glmnet', trControl= my_control, tuneGrid=lassoGrid) 
+lasso_mod$bestTune
+min(lasso_mod$results$RMSE)
+```
+
+
+The documentation of the caret `varImp' function says: for glmboost and glmnet the absolute value of the coefficients corresponding to the tuned model are used.
+
+Although this means that a real ranking of the most important variables is not stored, it gives me the opportunity to find out how many of the variables are not used in the model (and hence have coefficient 0).
+
+```{r}
+lassoVarImp <- varImp(lasso_mod,scale=F)
+lassoImportance <- lassoVarImp$importance
+
+varsSelected <- length(which(lassoImportance$Overall!=0))
+varsNotSelected <- length(which(lassoImportance$Overall==0))
+
+cat('Lasso uses', varsSelected, 'variables in its model, and did not select', varsNotSelected, 'variables.')
+
+colnames(train1)[which(lassoImportance$Overall!=0)]
+```
+
+So lasso did what it is supposed to do: it seems to have dealt with multicolinearity well by not using about 45% of the available variables in the model.
+
+```{r}
+LassoPred <- predict(lasso_mod, test1)
+predictions_lasso <- exp(LassoPred) #need to reverse the log to the real values
+head(predictions_lasso)
+```
+
+# Random Forest
 #separate training and testing dataset from the available data
+```{r}
+
+
 library(caret)
+x_train=train1
+y_train=all$SalePrice[!is.na(all$SalePrice)]
+train=cbind(x_train,y_train)
+names(train) <- make.names(names(train))
+
 set.seed(123)
 partition <- createDataPartition(y=y_train,
                                  p=.5,
                                  list=F)
+
+
 training <- train[partition,]
 testing <- train[-partition,]
-
-
-```
-
-#run Linear regression
-```{r}
-lm_model_1 <- lm(logSalePrice ~ ., data=training)
-summary(lm_model_1)
-```
-#R square is not bad, will choose some variables and try to remove collinarity
-```{r}
-lm_model_2 <- lm(logSalePrice ~ WoodDeckSF+GarageCars+Functional+KitchenQual+X1stFlrSF+X2ndFlrSF+
-                   Heating+BsmtFinSF1+MasVnrType+Neighborhood+YearBuilt+OverallCond+YearRemodAdd+SaleType+
-                   Exterior1st+OverallQual+HouseStyle+
-                   MSZoning+LotArea+BsmtExposure, data=training)
-summary(lm_model_2)
-
-```
-
-
-```{r}
-lm_model_2$xlevels[["Heating"]] <- union(lm_model_2$xlevels[["Heating"]], levels(testing$Heating))
-lm_model_2$xlevels[["SaleType"]] <- union(lm_model_2$xlevels[["SaleType"]], levels(testing$SaleType))
-lm_model_2$xlevels[["Exterior1st"]] <- union(lm_model_2$xlevels[["Exterior1st"]], levels(testing$Exterior1st))
-prediction <- predict(lm_model_2, testing, type="response", se.fit=FALSE)
-model_output <- cbind(testing, prediction)
-
-#Test with RMSE
-
-library(Metrics)
-rmse(model_output$logSalePrice,model_output$prediction)
-
-```
-#use random forest
-```{r}
-
-library(tree)
 library(randomForest)
-model_1 <- randomForest(logSalePrice ~ ., data=training)
+
+model_1 <- randomForest(y_train~ ., data=training)
 
 
 # Predict using the test set
 prediction <- predict(model_1, testing)
 model_output <- cbind(testing, prediction)
 
-
 #Test with RMSE
-
-rmse(model_output$logSalePrice,model_output$prediction)
+library(Metrics)
+rmse(model_output$y_train,model_output$prediction)
 ```
+
+##XGBoost model
+
+Initially, I just worked with the XGBoost package directly. The main reason for this was that the package uses its own efficient datastructure (xgb.DMatrix). The package also provides a cross validation function. However, this CV function only determines the optimal number of rounds, and does not support a full grid search of hyperparameters.
+
+Although caret does not seem to use the (fast) datastructure of the xgb package, I eventually decided to do hyperparameter tuning with it anyway, as it at least supports a full grid search. As far as I understand it, the main parameters to tune to avoid overfitting are max_depth, and min_child_weight (see [XGBoost documentation](http://xgboost.readthedocs.io/en/latest/how_to/param_tuning.html)). Below I am setting up a grid that tunes both these parameters, and also the eta (learning rate).
+
+```{r}
+xgb_grid = expand.grid(
+nrounds = 1000,
+eta = c(0.1, 0.05, 0.01),
+max_depth = c(2, 3, 4, 5, 6),
+gamma = 0,
+colsample_bytree=1,
+min_child_weight=c(1, 2, 3, 4 ,5),
+subsample=1
+)
+```
+
+The next step is to let caret find the best hyperparameter values (using 5 fold cross validation).
+
+```{r}
+#xgb_caret <- train(x=train1, y=all$SalePrice[!is.na(all$SalePrice)], method='xgbTree', trControl= my_control, tuneGrid=xgb_grid) 
+#xgb_caret$bestTune
+```
+
+As expected, this took quite a bit of time (locally). As I want to limit the running time on Kaggle, I disabled the code, and am just continuing with the results. According to caret, the 'bestTune' parameters are:
+
+* Max_depth=3
+* eta=0.05
+* Min_child_weight=4
+
+In the remainder of this section, I will continue to work with the xgboost package directly. Below, I am starting with the preparation of the data in the recommended format.
+
+```{r}
+label_train <- all$SalePrice[!is.na(all$SalePrice)]
+
+# put our testing & training data into two seperates Dmatrixs objects
+dtrain <- xgb.DMatrix(data = as.matrix(train1), label= label_train)
+test1$SalePrice<-NULL
+dtest <- xgb.DMatrix(data = as.matrix(test1))
+```
+
+In addition, I am taking over the best tuned values from the caret cross validation.
+
+```{r}
+default_param<-list(
+        objective = "reg:linear",
+        booster = "gbtree",
+        eta=0.05, #default = 0.3
+        gamma=0,
+        max_depth=3, #default=6
+        min_child_weight=4, #default=1
+        subsample=1,
+        colsample_bytree=1
+)
+```
+
+The next step is to do cross validation to determine the best number of rounds (for the given set of parameters). 
+
+```{r}
+xgbcv <- xgb.cv( params = default_param, data = dtrain, nrounds = 500, nfold = 5, showsd = T, stratified = T, print_every_n = 40, early_stopping_rounds = 10, maximize = F)
+```
+
+Although it was a bit of work, the hyperparameter tuning definitly paid of, as the cross validated RMSE inproved considerably (from 0.1271 without the caret tuning, to 0.1162 in this version)!
+
+```{r}
+#train the model using the best iteration found by cross validation
+xgb_mod <- xgb.train(data = dtrain, params=default_param, nrounds = 310)
+```
+
+```{r}
+XGBpred <- predict(xgb_mod, dtest)
+predictions_XGB <- exp(XGBpred) #need to reverse the log to the real values
+head(predictions_XGB)
+```
+
+```{r, out.width="100%"}
+#view variable importance plot
+library(Ckmeans.1d.dp) #required for ggplot clustering
+
+mat <- xgb.importance (feature_names = colnames(train1),model = xgb_mod)
+xgb.ggplot.importance(importance_matrix = mat[1:20], rel_to_first = TRUE)
+```
+
+##Averaging predictions
+
+Since the lasso and XGBoost algorithms are very different, averaging predictions likely improves the scores. As the lasso model does better regarding the cross validated RMSE score (0.1121 versus 0.1162), I am weigting the lasso model double.
+
+```{r}
+sub_avg <- data.frame(Id = test_labels, SalePrice = (predictions_XGB+2*predictions_lasso)/3)
+head(sub_avg)
+write.csv(sub_avg, file = 'average.csv', row.names = F)
+```
+
 
 ```
 
